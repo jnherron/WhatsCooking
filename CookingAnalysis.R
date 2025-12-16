@@ -1,10 +1,10 @@
 library(jsonlite) 
 library(tidyverse)
-library(tidytext) # Coment
+library(tidytext)
 library(tidymodels)
 library(stringr)
 library(vroom)
-library(textrecipes) # Coment
+library(textrecipes)
 library(dplyr)
 library(discrim)
 library(embed)
@@ -17,76 +17,38 @@ library(glmnet)
 library(kknn)
 library(stopwords)
 
+
+
 train_data <- read_file("train.json") %>%
   fromJSON()
 test_data <- read_file("test.json") %>%
   fromJSON()
 
+train_data <- train_data %>%
+  mutate(ingredients=sapply(ingredients, FUN=function(lst){
+    paste(lst, collapse=" ")
+  }))
 
-# train_data <- train_data %>%
-#   mutate(ingredients=sapply(ingredients, FUN=function(lst){
-#     paste(lst, collapse=" ")
-#   }))
-# 
-# test_data <- test_data %>%
-#   mutate(ingredients = sapply(ingredients, function(lst){
-#     paste(lst, collapse=" ")
-#   }))
-# 
-# my_recipe <- recipe(cuisine~., data=train_data) %>%
-#   step_mutate(fish = str_detect(ingredients, "fish")) %>%
-#   step_mutate(pasta = str_detect(ingredients, "pasta")) %>%
-#   step_mutate(olive = str_detect(ingredients, "olive")) %>%
-#   step_mutate(bean = str_detect(ingredients, "bean")) %>%
-#   step_mutate(rice = str_detect(ingredients, "rice")) %>%
-#   step_mutate(potato = str_detect(ingredients, "potato")) %>%
-#   step_rm(id)
-
-# baked <- bake(prep(my_recipe), new_data = train_data)
+test_data <- test_data %>%
+  mutate(ingredients = sapply(ingredients, function(lst){
+    paste(lst, collapse=" ")
+  }))
 
 
 # TFIDF ------------------------------------------------------------------------
 
-# my_recipe <- recipe(cuisine ~ ingredients, data = train_data) %>%
-#   step_mutate(ingredients = tokenlist(ingredients)) %>%
-#   step_tokenfilter(ingredients, max_tokens=500) %>%
-#   step_tfidf(ingredients)
-
 my_recipe <- recipe(cuisine ~ ingredients, data = train_data) %>%
-  # step_stopwords(ingredients_text) %>%
-  # step_mutate(fish = purrr::map_lgl(ingredients, ~ "fish" %in% .x)) %>%
-  # step_mutate(pasta = purrr::map_lgl(ingredients, ~ "pasta" %in% .x)) %>%
-  # step_mutate(olive = purrr::map_lgl(ingredients, ~ "olive" %in% .x)) %>%
-  # step_mutate(bean = purrr::map_lgl(ingredients, ~ "bean" %in% .x)) %>%
-  # step_mutate(rice = purrr::map_lgl(ingredients, ~ "rice" %in% .x)) %>%
-  # step_mutate(soy = purrr::map_lgl(ingredients, ~ "soy" %in% .x)) %>%
-  # step_mutate(masala = purrr::map_lgl(ingredients, ~ "masala" %in% .x)) %>%
-  # step_mutate(wine = purrr::map_lgl(ingredients, ~ "wine" %in% .x)) %>%
-  step_mutate(ingredients = tokenlist(ingredients)) %>%
-  # step_lemma(ingredients) %>%
-  # step_stem(ingredients_text) %>%
-  step_stopwords(ingredients) %>% # Works
-  step_tokenfilter(ingredients, max_tokens=1000) %>%
-  # step_stopwords(ingredients) %>% # Works
-  # step_lemma(ingredients) %>%
-  # step_stem(ingredients) %>% # Works
+  step_tokenize(ingredients) %>%
+  step_tokenfilter(ingredients, max_tokens = 1500) %>%
   step_tfidf(ingredients)
-  # step_downsample(all_outcomes())
-
-# my_recipe <- recipe(cuisine ~ ingredients, data = train_data) %>%
-#   step_tokenize(ingredients) %>%
-#   step_tokenize(ingredients, token = "ngrams", options = list(n = 2)) %>%
-#   step_tokenfilter(ingredients, max_tokens = 1000) %>%
-#   step_tfidf(ingredients)
 
 # baked <- bake(prep(my_recipe), new_data = train_data)
 # View(baked)
 
 
-
 # Random Forest ----------------------------------------------------------------
 
-forest_mod <- rand_forest(mtry = tune(), min_n=tune(), trees=100) %>%
+forest_mod <- rand_forest(mtry = tune(), min_n=tune(), trees=150) %>%
   set_engine("ranger") %>%
   set_mode("classification")
 
@@ -94,7 +56,7 @@ forest_wf <- workflow() %>%
   add_recipe(my_recipe) %>%
   add_model(forest_mod)
 
-tuning_grid <- grid_regular(mtry(range=c(1,30)), min_n(), levels=3)
+tuning_grid <- grid_regular(mtry(range=c(1,50)), min_n(), levels=3)
 folds <- vfold_cv(train_data, v = 5, repeats=1)
 
 cv_results <- forest_wf %>%
@@ -261,33 +223,6 @@ vroom_write(x=kag_sub, file="./Forest_tokens1000_trees100_l3v5.csv", delim=",")
 # 
 # kag_sub <- data.frame(RefId = test_data$RefId, IsBadBuy = auto_preds$.pred_1)
 # vroom_write(x=kag_sub, file="./Stack_2.csv", delim=",")
-
-
-# Penalized Log Reg ------------------------------------------------------------
-
-p_logreg_mod <- multinom_reg(mixture=tune(), penalty=tune()) %>%
-  set_engine("glmnet")
-
-p_logreg_wf <- workflow() %>%
-  add_recipe(my_recipe) %>%
-  add_model(p_logreg_mod)
-
-tuning_grid <- grid_regular(penalty(), mixture(), levels = 3)
-folds <- vfold_cv(train_data, v = 5, repeats=1)
-
-cv_results <- p_logreg_wf %>%
-  tune_grid(resamples=folds, grid=tuning_grid, metrics=metric_set(accuracy))
-best_tune <- cv_results %>%
-  select_best(metric="accuracy")
-
-final_wf <- p_logreg_wf %>%
-  finalize_workflow(best_tune) %>%
-  fit(data=train_data)
-
-p_logreg_preds <- predict(final_wf, new_data=test_data, type="class")
-
-kag_sub <- data.frame(RefId = test_data$RefId, IsBadBuy = p_logreg_preds$.pred_1)
-vroom_write(x=kag_sub, file="./PenLogReg.csv", delim=",")
 
 
 # KNN --------------------------------------------------------------------------
